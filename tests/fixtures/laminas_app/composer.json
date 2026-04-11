@@ -1,0 +1,8 @@
+{
+  "name": "example/laminas-app",
+  "require": {
+    "php": "^8.2",
+    "laminas/laminas-mvc": "^3.2",
+    "laminas/laminas-router": "^3.10"
+  }
+}
