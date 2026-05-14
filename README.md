@@ -1,6 +1,6 @@
 # attackmap-analyzer-php-laminas
 
-Framework-aware Laminas analyzer for [AttackMap](https://gitlab.com/matthewd.xyzAI/attackmap).
+Framework-aware Laminas analyzer for [AttackMap](https://github.com/mlaify/AttackMap).
 
 This module focuses on structured signal extraction for Laminas/Zend MVC projects:
 
