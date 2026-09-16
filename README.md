@@ -1,5 +1,10 @@
 # attackmap-analyzer-php-laminas
 
+> [!NOTE]
+> **Development is paused.** This project is not under active development.
+> The code remains available for reference, and security reports are still
+> welcome at [security@mlaify.io](mailto:security@mlaify.io).
+
 Framework-aware Laminas analyzer for [AttackMap](https://github.com/mlaify/AttackMap).
 
 This module focuses on structured signal extraction for Laminas/Zend MVC projects:
