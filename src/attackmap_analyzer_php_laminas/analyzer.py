@@ -7,14 +7,15 @@ from pathlib import Path
 from .contracts import AnalyzerMetadata, AuthHint, DatabaseHint, ExternalCall, Route, ScanResult, SecretHint
 
 LAMINAS_ROUTE_PATTERN = re.compile(r"['\"]route['\"]\s*=>\s*['\"]([^'\"]+)['\"]", re.IGNORECASE)
-LAMINAS_CONTROLLER_PATTERN = re.compile(
-    r"([A-Za-z_\\][A-Za-z0-9_\\]*Controller[A-Za-z0-9_\\]*)::class",
-    re.IGNORECASE,
-)
-LAMINAS_SERVICE_PATTERN = re.compile(
-    r"([A-Za-z_\\][A-Za-z0-9_\\]*(?:Service|Manager|Repository|TableGateway|Adapter)[A-Za-z0-9_\\]*)::class",
-    re.IGNORECASE,
-)
+# `Foo\\BarController::class` — whole token matched possessively, keyword
+# checked in Python (see the service pattern below; mlaify/AttackMap#236).
+LAMINAS_CONTROLLER_PATTERN = re.compile(r"(?<![A-Za-z0-9_\\])([A-Za-z_\\][A-Za-z0-9_\\]*+)::class")
+# Match the whole `Foo\\BarService::class` token in one possessive pass, then
+# check for a service keyword in Python. The old single regex
+# (`[..]*(?:Service|…)[..]*::class`) backtracked quadratically on a long
+# identifier-like line, enough to stall a scan (mlaify/AttackMap#236).
+LAMINAS_SERVICE_PATTERN = re.compile(r"(?<![A-Za-z0-9_\\])([A-Za-z_\\][A-Za-z0-9_\\]*+)::class")
+_SERVICE_WORD = re.compile(r"Service|Manager|Repository|TableGateway|Adapter", re.IGNORECASE)
 
 OUTBOUND_PATTERNS = [
     re.compile(r"curl_init\s*\(\s*['\"](https?://[^'\"]+)['\"]", re.IGNORECASE),
@@ -160,6 +161,8 @@ class PhpLaminasAnalyzer:
     def _extract_laminas_controllers(self, content: str, relative: str, result: ScanResult) -> None:
         found = False
         for match in LAMINAS_CONTROLLER_PATTERN.finditer(content):
+            if "controller" not in match.group(1).lower():
+                continue
             found = True
             self._append_unique_auth(result, f"controller:{match.group(1)}", relative)
         if found:
@@ -168,6 +171,8 @@ class PhpLaminasAnalyzer:
     def _extract_laminas_services(self, content: str, relative: str, result: ScanResult) -> None:
         found = False
         for match in LAMINAS_SERVICE_PATTERN.finditer(content):
+            if not _SERVICE_WORD.search(match.group(1)):
+                continue
             found = True
             self._append_unique_auth(result, f"service:{match.group(1)}", relative)
         if found or "'service_manager'" in content or '"service_manager"' in content:
