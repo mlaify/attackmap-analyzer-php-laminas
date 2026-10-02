@@ -12,7 +12,7 @@ Framework-aware Laminas analyzer for [AttackMap](https://github.com/mlaify/Attac
 
 This module focuses on structured signal extraction for Laminas/Zend MVC projects:
 
-- route paths from config arrays
+- route paths from config arrays (`'route' => '/album[/:id]'`; route *names* such as navigation's `'route' => 'home'` are not routes)
 - controller mapping hints
 - service-manager mapping hints
 - broad PHP security signals (outbound calls, datastore, auth, secret hints)
@@ -30,10 +30,13 @@ This module focuses on structured signal extraction for Laminas/Zend MVC project
 `detect(repo_path)` returns true when one or more Laminas indicators exist:
 
 - composer dependencies beginning with `laminas/` or `zendframework/`
-- `config/application.config.php`
-- any `module.config.php`
-- `module/` directory
+- a `module/` directory together with `config/application.config.php`
+- any `module.config.php` outside `vendor/` (and the other shared skip dirs)
+
+A generic `src/`, `app/` or `config/` directory on its own is not enough.
 
 ## Notes
 
 This analyzer is heuristic and intentionally avoids AST parsing in this first iteration.
+
+Secret hints are env var names (`getenv`, `$_ENV`, `$_SERVER`) containing `SECRET`, `TOKEN`, `KEY`, `PASSWORD` or `PASSWD`, matched case-sensitively; `DB_HOST`-style connection settings are not secrets. `jwt` needs a JWT library (`Firebase\JWT\JWT`, `JWT::decode/encode`, `Lcobucci\JWT`, `tymon/jwt-auth`), and `auth` needs the `Auth::` facade or a chained `auth()->…` helper.

@@ -17,7 +17,12 @@ from .contracts import (
     SecretHint,
 )
 
-LAMINAS_ROUTE_PATTERN = re.compile(r"['\"]route['\"]\s*=>\s*['\"]([^'\"]+)['\"]", re.IGNORECASE)
+# Laminas router `'options' => ['route' => '/album[/:id]']`. Only URL path
+# specs: rooted (`/...`) or an optional child segment (`[/:id]`). The same
+# `'route' =>` key in `navigation` pages and redirects holds a route *name*
+# (`'route' => 'home'`, `'route' => 'admin/site'`), which is not a path
+# (port of mlaify/attackmap-analyzer-php-web#2's config-path fix).
+LAMINAS_ROUTE_PATTERN = re.compile(r"['\"]route['\"]\s*=>\s*['\"]([/\[][^'\"]*)['\"]", re.IGNORECASE)
 # `Foo\\BarController::class` — whole token matched possessively, keyword
 # checked in Python (see the service pattern below; mlaify/AttackMap#236).
 LAMINAS_CONTROLLER_PATTERN = re.compile(r"(?<![A-Za-z0-9_\\])([A-Za-z_\\][A-Za-z0-9_\\]*+)::class")
@@ -47,14 +52,29 @@ DATABASE_PATTERNS = [
 AUTH_PATTERNS = [
     (re.compile(r"\bsession_start\s*\(", re.IGNORECASE), "session"),
     (re.compile(r"\$_SESSION\b", re.IGNORECASE), "session"),
-    (re.compile(r"JWT|firebase\\jwt", re.IGNORECASE), "jwt"),
-    (re.compile(r"\bAuth::|\bauth\s*\(", re.IGNORECASE), "auth"),
+    # A JWT library, not any "jwt" substring (`$jwtSecret`, comments)
+    # (port of mlaify/attackmap-analyzer-php-web#2).
+    (
+        re.compile(
+            r"Firebase\\JWT\\JWT|\bJWT::(?:decode|encode)\b|Lcobucci\\JWT|lcobucci/jwt"
+            r"|Tymon\\JWTAuth|tymon/jwt-auth|\bJWTAuth::"
+        ),
+        "jwt",
+    ),
+    # Laravel-style `Auth::` facade or the `auth()` / `auth('guard')` helper
+    # chained into a guard call, not any function or method named `auth(`.
+    (re.compile(r"\bAuth::|(?<![\w$>:\\])auth\s*\(\s*(?:['\"][\w-]*['\"]\s*)?\)\s*->"), "auth"),
 ]
 
+# Secret-shaped env var names only. `API`/`DB` on their own matched
+# `DB_HOST`/`API_URL`; `DB_PASSWORD`/`API_KEY`/`API_TOKEN` still match via
+# PASSWORD/KEY/TOKEN. Case-sensitive: env var names are upper-case
+# (port of mlaify/attackmap-analyzer-php-web#2).
+_SECRET_NAME = r"([A-Z0-9_]*(?:SECRET|TOKEN|KEY|PASSWORD|PASSWD)[A-Z0-9_]*)"
 SECRET_PATTERNS = [
-    re.compile(r"getenv\s*\(\s*['\"]([A-Z0-9_]*(SECRET|TOKEN|KEY|PASSWORD|API|DB)[A-Z0-9_]*)['\"]", re.IGNORECASE),
-    re.compile(r"\$_ENV\s*\[\s*['\"]([A-Z0-9_]*(SECRET|TOKEN|KEY|PASSWORD|API|DB)[A-Z0-9_]*)['\"]\s*\]", re.IGNORECASE),
-    re.compile(r"\$_SERVER\s*\[\s*['\"]([A-Z0-9_]*(SECRET|TOKEN|KEY|PASSWORD|API|DB)[A-Z0-9_]*)['\"]\s*\]", re.IGNORECASE),
+    re.compile(r"getenv\s*\(\s*['\"]" + _SECRET_NAME + r"['\"]"),
+    re.compile(r"\$_ENV\s*\[\s*['\"]" + _SECRET_NAME + r"['\"]\s*\]"),
+    re.compile(r"\$_SERVER\s*\[\s*['\"]" + _SECRET_NAME + r"['\"]\s*\]"),
 ]
 
 

@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — false positives on ordinary PHP (port of mlaify/attackmap-analyzer-php-web#2)
+
+- **Route names are not routes.** `'route' =>` values must be URL path specs: rooted (`/album`) or an optional child segment (`[/:id]`). Navigation pages and other config that name a route (`'route' => 'home'`, `'route' => 'album/view'`) no longer yield `ANY home` routes. This is the Laminas form of php-web's config `'path' =>` fix.
+- **`DB_*` / `API_*` settings are not secrets.** Secret env names must contain `SECRET`, `TOKEN`, `KEY`, `PASSWORD` or `PASSWD`, matched case-sensitively. `getenv('DB_HOST')`, `getenv('API_URL')` and lower-case names such as `getenv('cache_key_prefix')` no longer match; `DB_PASSWORD`, `API_KEY` and `API_TOKEN` still do.
+- **`jwt` needs a JWT library.** The case-insensitive `JWT` substring matched any `$jwtSecret` variable or comment. The hint now needs `Firebase\JWT\JWT`, `JWT::decode/encode`, `Lcobucci\JWT`, `tymon/jwt-auth` or `JWTAuth::`.
+- **`auth` needs the `Auth::` facade or a chained `auth()->…` helper.** `\bauth\s*\(` matched any `auth(` function or method (e.g. a controller's private `$this->auth($user)`).
+- Not applicable here: php-web's Slim `$x->get('/…')` receiver check (this analyzer has no Slim/FastRoute extraction) and its `detect()` fix (this `detect()` already needs Laminas composer deps, `module/` + `config/application.config.php`, or a non-vendored `module.config.php`).
+
 ### Changed — typed signals instead of overloaded `AuthHint`s (AttackMap#258)
 
 - **`auth_hints` now carries only auth signals** (`session`, `jwt`, `auth`). Laminas framework metadata moved to `FrameworkHint` (`framework_hints`) with the same hint strings, which is where core's MVC chain linker and `_extract_prefixed_hints` already look for the `controller:`, `service:` and `laminas_` prefixes:
