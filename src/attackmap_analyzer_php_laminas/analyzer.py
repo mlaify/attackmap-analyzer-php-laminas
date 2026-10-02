@@ -4,6 +4,8 @@ import json
 import re
 from pathlib import Path
 
+from attackmap.sdk import iter_repo_files, read_source, rel
+
 from .contracts import AnalyzerMetadata, AuthHint, DatabaseHint, ExternalCall, Route, ScanResult, SecretHint
 
 LAMINAS_ROUTE_PATTERN = re.compile(r"['\"]route['\"]\s*=>\s*['\"]([^'\"]+)['\"]", re.IGNORECASE)
@@ -56,7 +58,7 @@ class PhpLaminasAnalyzer:
         scope="Laminas and Zend Framework MVC projects using module and application config arrays.",
         targets=["php-laminas", "laminas", "zendframework"],
         languages=["php"],
-        priority=30,
+        priority=70,
         experimental=True,
         enabled_by_default=False,
     )
@@ -70,13 +72,13 @@ class PhpLaminasAnalyzer:
         if not root.exists() or not root.is_dir():
             return False
 
-        if self._has_laminas_composer_dependencies(root / "composer.json"):
+        if self._has_laminas_composer_dependencies(root):
             return True
 
         if (root / "module").is_dir() and (root / "config" / "application.config.php").exists():
             return True
 
-        if any(root.rglob("module.config.php")):
+        if next(iter_repo_files(root, names={"module.config.php"}), None) is not None:
             return True
 
         return False
@@ -88,25 +90,20 @@ class PhpLaminasAnalyzer:
         if not root.exists() or not root.is_dir():
             return result
 
-        composer_path = root / "composer.json"
-        if composer_path.exists():
-            self._extract_composer_signals(composer_path, result)
+        self._extract_composer_signals(root, result)
 
-        for file_path in root.rglob("*.php"):
-            if not file_path.is_file():
-                continue
-            if any(part in {"vendor", ".git", "node_modules"} for part in file_path.parts):
-                continue
-
+        # Pruned by repo-relative dir name (vendor, node_modules, .git, ...);
+        # symlinks out of the repo are not followed (AttackMap#253).
+        for file_path in iter_repo_files(root, suffixes={".php"}):
             result.files_scanned += 1
             if "php" not in result.languages:
                 result.languages.append("php")
 
-            content = self._read_text(file_path)
+            content = read_source(file_path)
             if content is None:
                 continue
 
-            relative = str(file_path.relative_to(root))
+            relative = rel(file_path, root)
             self._extract_routes(content, relative, result)
             self._extract_laminas_controllers(content, relative, result)
             self._extract_laminas_services(content, relative, result)
@@ -118,12 +115,9 @@ class PhpLaminasAnalyzer:
         result.languages.sort()
         return result
 
-    def _has_laminas_composer_dependencies(self, composer_path: Path) -> bool:
-        if not composer_path.exists():
-            return False
-        try:
-            data = json.loads(composer_path.read_text(encoding="utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
+    def _has_laminas_composer_dependencies(self, root: Path) -> bool:
+        data = self._load_composer(root)
+        if data is None:
             return False
 
         requirements = {
@@ -136,10 +130,9 @@ class PhpLaminasAnalyzer:
                 return True
         return False
 
-    def _extract_composer_signals(self, composer_path: Path, result: ScanResult) -> None:
-        try:
-            data = json.loads(composer_path.read_text(encoding="utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError):
+    def _extract_composer_signals(self, root: Path, result: ScanResult) -> None:
+        data = self._load_composer(root)
+        if data is None:
             return
 
         requirements = {
@@ -199,11 +192,15 @@ class PhpLaminasAnalyzer:
                 self._append_unique_secret(result, match.group(1), relative)
 
     @staticmethod
-    def _read_text(path: Path) -> str | None:
-        try:
-            return path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
+    def _load_composer(root: Path) -> dict | None:
+        text = read_source(root / "composer.json", root=root)
+        if text is None:
             return None
+        try:
+            data = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        return data if isinstance(data, dict) else None
 
     @staticmethod
     def _append_unique_route(result: ScanResult, path: str, method: str, file: str) -> None:
