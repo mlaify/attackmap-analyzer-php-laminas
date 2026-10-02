@@ -42,16 +42,34 @@ def test_analyze_extracts_routes_controllers_and_services() -> None:
     result = analyzer.analyze(FIXTURES / "laminas_app")
 
     route_keys = {(route.path, route.method) for route in result.routes}
-    auth_hints = {hint.hint for hint in result.auth_hints}
+    framework_hints = {hint.hint for hint in result.framework_hints}
 
     assert ("/", "ANY") in route_keys
     assert ("/admin", "ANY") in route_keys
     assert ("/api[/:id]", "ANY") in route_keys
 
-    assert any(hint.startswith("controller:Application\\Controller\\") for hint in auth_hints)
-    assert any(hint.startswith("service:Application\\Service\\") for hint in auth_hints)
-    assert "laminas_controller_mapping" in auth_hints
-    assert "laminas_service_manager" in auth_hints
+    # Framework metadata is a FrameworkHint, not an AuthHint (AttackMap#258).
+    assert any(hint.startswith("controller:Application\\Controller\\") for hint in framework_hints)
+    assert any(hint.startswith("service:Application\\Service\\") for hint in framework_hints)
+    assert "laminas_controller_mapping" in framework_hints
+    assert "laminas_service_manager" in framework_hints
+    assert "laminas_dependency" in framework_hints
+    assert result.auth_hints == []
+
+
+def test_auth_signals_stay_auth_hints_with_line_and_evidence(tmp_path: Path) -> None:
+    (tmp_path / "composer.json").write_text('{"require": {"laminas/laminas-mvc": "^3.0"}}')
+    (tmp_path / "Login.php").write_text(
+        "<?php\n\nsession_start();\n$token = JWT::decode($raw, $key);\nif (!auth()) { exit; }\n"
+    )
+    result = PhpLaminasAnalyzer().analyze(tmp_path)
+    by_hint = {hint.hint: hint for hint in result.auth_hints}
+    assert set(by_hint) == {"session", "jwt", "auth"}
+    assert (by_hint["session"].line, by_hint["session"].evidence_text) == (3, "session_start();")
+    assert by_hint["jwt"].line == 4
+    assert by_hint["auth"].line == 5
+    dependency = next(h for h in result.framework_hints if h.hint == "laminas_dependency")
+    assert (dependency.file, dependency.line) == ("composer.json", 1)
 
 
 def test_analyze_returns_core_compatible_scan_shape() -> None:
@@ -93,7 +111,7 @@ def test_repo_checked_out_under_skip_dir_name_is_still_analyzed(tmp_path: Path, 
     result = analyzer.analyze(repo)
     assert result.files_scanned > 0
     assert result.routes
-    assert any(h.hint == "laminas_controller_mapping" for h in result.auth_hints)
+    assert any(h.hint == "laminas_controller_mapping" for h in result.framework_hints)
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges on Windows")
