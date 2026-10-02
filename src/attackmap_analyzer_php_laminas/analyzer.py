@@ -4,9 +4,18 @@ import json
 import re
 from pathlib import Path
 
-from attackmap.sdk import iter_repo_files, read_source, rel
+from attackmap.sdk import iter_repo_files, line_of, line_snippet, read_source, rel
 
-from .contracts import AnalyzerMetadata, AuthHint, DatabaseHint, ExternalCall, Route, ScanResult, SecretHint
+from .contracts import (
+    AnalyzerMetadata,
+    AuthHint,
+    DatabaseHint,
+    ExternalCall,
+    FrameworkHint,
+    Route,
+    ScanResult,
+    SecretHint,
+)
 
 LAMINAS_ROUTE_PATTERN = re.compile(r"['\"]route['\"]\s*=>\s*['\"]([^'\"]+)['\"]", re.IGNORECASE)
 # `Foo\\BarController::class` — whole token matched possessively, keyword
@@ -131,8 +140,9 @@ class PhpLaminasAnalyzer:
         return False
 
     def _extract_composer_signals(self, root: Path, result: ScanResult) -> None:
+        text = read_source(root / "composer.json", root=root)
         data = self._load_composer(root)
-        if data is None:
+        if data is None or text is None:
             return
 
         requirements = {
@@ -142,54 +152,71 @@ class PhpLaminasAnalyzer:
 
         for package in requirements:
             lowered = package.lower()
+            offset = self._composer_offset(text, package)
             if lowered.startswith("laminas/") or lowered.startswith("zendframework/"):
-                self._append_unique_auth(result, "laminas_dependency", "composer.json")
+                self._append_unique_hint(
+                    result.framework_hints, FrameworkHint, "laminas_dependency", "composer.json", text, offset, 0.9
+                )
             if "doctrine" in lowered:
-                self._append_unique_database(result, "sql", "composer.json")
+                self._append_unique_database(result, "sql", "composer.json", text, offset)
 
     def _extract_routes(self, content: str, relative: str, result: ScanResult) -> None:
         for match in LAMINAS_ROUTE_PATTERN.finditer(content):
-            self._append_unique_route(result, match.group(1), "ANY", relative)
+            self._append_unique_route(result, match.group(1), "ANY", relative, line_of(content, match.start()))
 
     def _extract_laminas_controllers(self, content: str, relative: str, result: ScanResult) -> None:
-        found = False
+        first: int | None = None
         for match in LAMINAS_CONTROLLER_PATTERN.finditer(content):
             if "controller" not in match.group(1).lower():
                 continue
-            found = True
-            self._append_unique_auth(result, f"controller:{match.group(1)}", relative)
-        if found:
-            self._append_unique_auth(result, "laminas_controller_mapping", relative)
+            if first is None:
+                first = match.start()
+            self._append_unique_hint(
+                result.framework_hints, FrameworkHint, f"controller:{match.group(1)}", relative, content, match.start(), 0.8
+            )
+        if first is not None:
+            self._append_unique_hint(
+                result.framework_hints, FrameworkHint, "laminas_controller_mapping", relative, content, first, 0.8
+            )
 
     def _extract_laminas_services(self, content: str, relative: str, result: ScanResult) -> None:
-        found = False
+        first: int | None = None
         for match in LAMINAS_SERVICE_PATTERN.finditer(content):
             if not _SERVICE_WORD.search(match.group(1)):
                 continue
-            found = True
-            self._append_unique_auth(result, f"service:{match.group(1)}", relative)
-        if found or "'service_manager'" in content or '"service_manager"' in content:
-            self._append_unique_auth(result, "laminas_service_manager", relative)
+            if first is None:
+                first = match.start()
+            self._append_unique_hint(
+                result.framework_hints, FrameworkHint, f"service:{match.group(1)}", relative, content, match.start(), 0.7
+            )
+        manager = re.search(r"['\"]service_manager['\"]", content)
+        anchor = manager.start() if manager else first
+        if anchor is not None:
+            self._append_unique_hint(
+                result.framework_hints, FrameworkHint, "laminas_service_manager", relative, content, anchor, 0.8
+            )
 
     def _extract_external_calls(self, content: str, relative: str, result: ScanResult) -> None:
         for pattern in OUTBOUND_PATTERNS:
             for match in pattern.finditer(content):
-                self._append_unique_external(result, match.group(1), relative)
+                self._append_unique_external(result, match.group(1), relative, content, match.start())
 
     def _extract_datastores(self, content: str, relative: str, result: ScanResult) -> None:
         for pattern, kind in DATABASE_PATTERNS:
-            if pattern.search(content):
-                self._append_unique_database(result, kind, relative)
+            match = pattern.search(content)
+            if match:
+                self._append_unique_database(result, kind, relative, content, match.start())
 
     def _extract_auth_hints(self, content: str, relative: str, result: ScanResult) -> None:
         for pattern, hint in AUTH_PATTERNS:
-            if pattern.search(content):
-                self._append_unique_auth(result, hint, relative)
+            match = pattern.search(content)
+            if match:
+                self._append_unique_hint(result.auth_hints, AuthHint, hint, relative, content, match.start())
 
     def _extract_secret_hints(self, content: str, relative: str, result: ScanResult) -> None:
         for pattern in SECRET_PATTERNS:
             for match in pattern.finditer(content):
-                self._append_unique_secret(result, match.group(1), relative)
+                self._append_unique_secret(result, match.group(1), relative, content, match.start())
 
     @staticmethod
     def _load_composer(root: Path) -> dict | None:
@@ -203,36 +230,63 @@ class PhpLaminasAnalyzer:
         return data if isinstance(data, dict) else None
 
     @staticmethod
-    def _append_unique_route(result: ScanResult, path: str, method: str, file: str) -> None:
+    def _composer_offset(text: str, package: str) -> int:
+        """Offset of a package's `"name": "constraint"` entry in composer.json (0 if not found)."""
+        index = text.find(f'"{package}"')
+        return index if index >= 0 else 0
+
+    @staticmethod
+    def _append_unique_route(result: ScanResult, path: str, method: str, file: str, line: int) -> None:
         key = (path, method, file)
         if any((item.path, item.method, item.file) == key for item in result.routes):
             return
-        result.routes.append(Route(path=path, method=method, file=file))
+        result.routes.append(Route(path=path, method=method, file=file, line=line))
 
     @staticmethod
-    def _append_unique_external(result: ScanResult, target: str, file: str) -> None:
+    def _append_unique_external(result: ScanResult, target: str, file: str, content: str, offset: int) -> None:
         key = (target, file)
         if any((item.target, item.file) == key for item in result.external_calls):
             return
-        result.external_calls.append(ExternalCall(target=target, file=file))
+        line = line_of(content, offset)
+        result.external_calls.append(
+            ExternalCall(target=target, file=file, line=line, evidence_text=line_snippet(content, line) or target)
+        )
 
     @staticmethod
-    def _append_unique_database(result: ScanResult, kind: str, file: str) -> None:
+    def _append_unique_database(result: ScanResult, kind: str, file: str, content: str, offset: int) -> None:
         key = (kind, file)
         if any((item.kind, item.file) == key for item in result.databases):
             return
-        result.databases.append(DatabaseHint(kind=kind, file=file))
+        line = line_of(content, offset)
+        result.databases.append(
+            DatabaseHint(kind=kind, file=file, line=line, evidence_text=line_snippet(content, line) or kind)
+        )
 
     @staticmethod
-    def _append_unique_auth(result: ScanResult, hint: str, file: str) -> None:
-        key = (hint, file)
-        if any((item.hint, item.file) == key for item in result.auth_hints):
+    def _append_unique_hint(
+        bucket: list,
+        model: type,
+        hint: str,
+        file: str,
+        content: str,
+        offset: int,
+        confidence: float | None = None,
+    ) -> None:
+        """Append an AuthHint/FrameworkHint once per (hint, file), located at ``offset``."""
+        if any((item.hint, item.file) == (hint, file) for item in bucket):
             return
-        result.auth_hints.append(AuthHint(hint=hint, file=file))
+        line = line_of(content, offset)
+        extra = {"confidence": confidence} if confidence is not None else {}
+        bucket.append(
+            model(hint=hint, file=file, line=line, evidence_text=line_snippet(content, line) or hint, **extra)
+        )
 
     @staticmethod
-    def _append_unique_secret(result: ScanResult, name: str, file: str) -> None:
+    def _append_unique_secret(result: ScanResult, name: str, file: str, content: str, offset: int) -> None:
         key = (name, file)
         if any((item.name, item.file) == key for item in result.secret_hints):
             return
-        result.secret_hints.append(SecretHint(name=name, file=file))
+        line = line_of(content, offset)
+        result.secret_hints.append(
+            SecretHint(name=name, file=file, line=line, evidence_text=line_snippet(content, line) or name)
+        )
