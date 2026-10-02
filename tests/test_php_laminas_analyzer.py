@@ -60,7 +60,7 @@ def test_analyze_extracts_routes_controllers_and_services() -> None:
 def test_auth_signals_stay_auth_hints_with_line_and_evidence(tmp_path: Path) -> None:
     (tmp_path / "composer.json").write_text('{"require": {"laminas/laminas-mvc": "^3.0"}}')
     (tmp_path / "Login.php").write_text(
-        "<?php\n\nsession_start();\n$token = JWT::decode($raw, $key);\nif (!auth()) { exit; }\n"
+        "<?php\n\nsession_start();\n$token = JWT::decode($raw, $key);\nif (!auth()->check()) { exit; }\n"
     )
     result = PhpLaminasAnalyzer().analyze(tmp_path)
     by_hint = {hint.hint: hint for hint in result.auth_hints}
@@ -133,3 +133,42 @@ def test_detect_ignores_module_config_under_vendor(tmp_path: Path) -> None:
     config.mkdir(parents=True)
     (config / "module.config.php").write_text("<?php return [];\n")
     assert PhpLaminasAnalyzer().detect(tmp_path) is False
+
+
+# ---------------------------------------------------------------------------
+# False positives on ordinary PHP (port of mlaify/attackmap-analyzer-php-web#2)
+# ---------------------------------------------------------------------------
+
+NOISE = FIXTURES / "laminas_noise_app"
+ALBUM_CONTROLLER = "module/Album/src/Controller/AlbumController.php"
+
+
+def test_navigation_route_names_are_not_routes() -> None:
+    # `'navigation' => [['route' => 'home'], ['route' => 'album/view']]` names
+    # routes; only the router's path specs are routes.
+    result = PhpLaminasAnalyzer().analyze(NOISE)
+    assert {(r.path, r.method) for r in result.routes} == {("/album", "ANY"), ("[/:id]", "ANY")}
+
+
+def test_db_and_api_connection_settings_are_not_secrets() -> None:
+    result = PhpLaminasAnalyzer().analyze(NOISE)
+    names = {s.name for s in result.secret_hints if s.file == ALBUM_CONTROLLER}
+    assert names == {"DB_PASSWORD", "API_KEY"}
+
+
+def test_lowercase_env_names_are_not_secrets(tmp_path: Path) -> None:
+    (tmp_path / "composer.json").write_text('{"require": {"laminas/laminas-mvc": "^3.0"}}')
+    (tmp_path / "a.php").write_text("<?php\n$k = getenv('cache_key_prefix');\n$s = getenv('APP_SECRET');\n")
+    names = {s.name for s in PhpLaminasAnalyzer().analyze(tmp_path).secret_hints}
+    assert names == {"APP_SECRET"}
+
+
+def test_jwt_substring_and_auth_method_are_not_auth_hints() -> None:
+    result = PhpLaminasAnalyzer().analyze(NOISE)
+    assert [h for h in result.auth_hints if h.file == ALBUM_CONTROLLER] == []
+
+
+def test_firebase_jwt_usage_is_a_jwt_hint() -> None:
+    result = PhpLaminasAnalyzer().analyze(NOISE)
+    hints = {(h.hint, h.file) for h in result.auth_hints}
+    assert ("jwt", "module/Album/src/Controller/TokenController.php") in hints

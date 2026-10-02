@@ -1,0 +1,4 @@
+{
+  "name": "acme/album",
+  "require": { "laminas/laminas-mvc": "^3.7", "firebase/php-jwt": "^6.0" }
+}
