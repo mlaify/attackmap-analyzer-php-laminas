@@ -21,7 +21,7 @@ from attackmap_analyzer_php_laminas.phparray import (
     parse_call_args,
     tokenize,
 )
-from attackmap_analyzer_php_laminas.routes import expand_optional, mezzio_routes, route_trees, router_routes
+from attackmap_analyzer_php_laminas.routes import expand_optional, mezzio_routes, minimal_form, route_trees, router_routes
 
 FIXTURES = Path(__file__).parent / "fixtures"
 NESTED = FIXTURES / "laminas_nested_app"
@@ -409,3 +409,13 @@ def test_stub_of_a_stub_resolves_across_files(tmp_path: Path) -> None:
     keys = _keys(tmp_path)
     assert ("/api/v1/users", "ANY") in keys
     assert ("/users", "ANY") not in keys
+
+
+def test_children_join_the_parent_minimal_form() -> None:
+    source = """<?php return ['router' => ['routes' => [
+        'h' => ['type' => 'Segment', 'options' => ['route' => '/h[/:action]'], 'child_routes' => [
+            'job' => ['type' => 'Segment', 'options' => ['route' => '/job/:id']],
+        ]],
+    ]]];"""
+    assert _routes(source) == {("/h/job/:id", "ANY")}
+    assert minimal_form("/a[/:b[/:c]]/d[/:e]") == "/a/d"

@@ -154,7 +154,8 @@ def expand_optional(template: str, max_forms: int = MAX_FORMS) -> list[str]:
 
 
 def minimal_form(template: str) -> str:
-    return expand_optional(template, 1)[0] if "[" in template else template
+    """``template`` with every optional group left out."""
+    return _render(_parse_optional(template), set()) if "[" in template else template
 
 
 def normalize_path(path: str) -> str:
