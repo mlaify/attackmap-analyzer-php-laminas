@@ -192,23 +192,54 @@ def route_type(value: PhpValue | None) -> str | None:
     return short or None
 
 
-def router_routes(tokens: list[Token]) -> tuple[list[LaminasRoute], bool]:
-    """Routes from every `'router' => ['routes' => [...]]` in the file, plus a
-    file that just `return`s a route map. Returns ``(routes, found_config)``;
-    ``found_config`` is True when a router routes array was recognized at all,
-    even if it held no path routes."""
-    out: list[LaminasRoute] = []
-    found = False
+@dataclass
+class RouteNode:
+    """What a named route passes to its children: the (minimal) path they
+    join onto, the merged defaults and an inherited Method verb."""
+
+    prefix: str
+    defaults: dict[str, PhpValue] = field(default_factory=dict)
+    method: str | None = None
+
+
+def route_trees(tokens: list[Token]) -> list[PhpArray]:
+    """The route maps in a file: every `'router' => ['routes' => [...]]`, or
+    else a file that just `return`s a route map."""
+    trees: list[PhpArray] = []
     for router in keyed_arrays(tokens, "router"):
         routes = router.get("routes")
         if isinstance(routes, PhpArray):
-            found = True
-            _walk(routes, "", "", {}, None, 0, out)
-    if not found:
-        for routes in _returned_route_maps(tokens):
-            found = True
-            _walk(routes, "", "", {}, None, 0, out)
-    return out, found
+            trees.append(routes)
+    return trees or _returned_route_maps(tokens)
+
+
+def router_routes(
+    trees: list[PhpArray],
+    known: dict[str, RouteNode] | None = None,
+    index: dict[str, RouteNode] | None = None,
+) -> list[LaminasRoute]:
+    """Routes from a file's route maps (see :func:`route_trees`).
+
+    Laminas merges every module's config, so a module can add children to a
+    route defined elsewhere (`'admin' => ['child_routes' => [...]]` with no
+    type or route of its own). Such a stub is placed using ``known`` (full
+    route name → :class:`RouteNode`); without an entry its children are
+    skipped rather than reported as top-level paths. ``index``, when given,
+    collects a :class:`RouteNode` for every named route walked, to build
+    ``known`` across files.
+    """
+    out: list[LaminasRoute] = []
+    ctx = _WalkContext(out, known or {}, index)
+    for routes in trees:
+        _walk(routes, "", "", {}, None, 0, ctx)
+    return out
+
+
+@dataclass
+class _WalkContext:
+    out: list[LaminasRoute]
+    known: dict[str, RouteNode]
+    index: dict[str, RouteNode] | None
 
 
 def _returned_route_maps(tokens: list[Token]) -> list[PhpArray]:
@@ -246,10 +277,11 @@ def _walk(
     defaults: dict[str, PhpValue],
     method: str | None,
     depth: int,
-    out: list[LaminasRoute],
+    ctx: _WalkContext,
 ) -> None:
     if depth > MAX_ROUTE_DEPTH:
         return
+    out = ctx.out
     for name, spec in routes.entries():
         if len(out) >= MAX_ROUTES_PER_FILE:
             return
@@ -260,12 +292,24 @@ def _walk(
         if not isinstance(options, PhpArray):
             options = PhpArray(offset=spec.offset)
         own_defaults = options.get("defaults")
-        merged = dict(defaults)
-        if isinstance(own_defaults, PhpArray):
-            merged.update(own_defaults.entries())
         full_name = f"{prefix_name}/{name}" if prefix_name else name
         children = spec.get("child_routes")
         terminates = not isinstance(children, PhpArray) or is_true(spec.get("may_terminate"))
+
+        if kind is None and options.get("route") is None and isinstance(children, PhpArray):
+            # A stub extending a route defined in another module's config.
+            base = ctx.known.get(full_name)
+            if base is None:
+                continue
+            merged = dict(base.defaults)
+            if isinstance(own_defaults, PhpArray):
+                merged.update(own_defaults.entries())
+            _walk(children, base.prefix, full_name, merged, base.method, depth + 1, ctx)
+            continue
+
+        merged = dict(defaults)
+        if isinstance(own_defaults, PhpArray):
+            merged.update(own_defaults.entries())
 
         methods: list[str] | None = [method or "ANY"]
         template = prefix
@@ -299,9 +343,11 @@ def _walk(
                 path = normalize_path(form)
                 for verb in methods:
                     out.append(LaminasRoute(path, verb, offset, full_name, template, merged))
+        child_method = methods[0] if kind == "method" and methods and len(methods) == 1 else method
+        if ctx.index is not None:
+            ctx.index.setdefault(full_name, RouteNode(minimal_form(template), merged, child_method))
         if isinstance(children, PhpArray):
-            child_method = methods[0] if kind == "method" and methods and len(methods) == 1 else method
-            _walk(children, minimal_form(template), full_name, merged, child_method, depth + 1, out)
+            _walk(children, minimal_form(template), full_name, merged, child_method, depth + 1, ctx)
 
 
 def _verbs(value: PhpValue | None) -> list[str]:
@@ -407,6 +453,8 @@ def _route_methods(value: PhpValue | None) -> list[str]:
 __all__ = [
     "LaminasRoute",
     "MezzioRoute",
+    "RouteNode",
+    "route_trees",
     "expand_optional",
     "mezzio_routes",
     "minimal_form",

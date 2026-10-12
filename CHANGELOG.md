@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`child_routes` are joined to their parent** instead of each `'route' =>` literal being a standalone route: Omeka S core's `'[/:resource[/:id]]'` under `/api` is now `/api/:resource` and `/api/:resource/:id`, not `[/:resource[/:id]]`. `'may_terminate'` decides whether a parent with children is itself a route.
 - **Method routes** (`Method::class` / `'verb' => 'post'`, comma lists) set the HTTP method on the parent's path.
+- **Config merged across modules**: a module's `'admin' => ['child_routes' => [...]]` stub joins onto the `admin` route defined in another module's config (stubs of unknown routes are skipped).
 - **Segment optional parts are expanded** to the minimal form plus one more optional group per form (at most 4 paths per route); no more `[` in route paths. `Regex` routes use their `spec`; `Hostname`/`Scheme` add no path; console routes are skipped.
 - **Mezzio** `$app->get/post/put/patch/delete/any(...)` and `$app->route(..., [methods])` are extracted from files that reference `Mezzio\` / `Zend\Expressive\`; `mezzio/*` composer packages count for `detect()`.
 - New `phparray.py` (bounded, string/comment-aware PHP array tokenizer) and `routes.py`, fuzzed in `tests/test_structural_routes.py`.

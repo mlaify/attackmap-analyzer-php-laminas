@@ -44,6 +44,7 @@ Router config is read with a small PHP-array tokenizer (`phparray.py`) that bala
 - **Method routes** (`'type' => Method::class, 'options' => ['verb' => 'post']`, or `'get,head'`) set the HTTP method on the parent's path instead of adding a path.
 - **Segment optional parts are expanded progressively**: the minimal form, then one more optional group opened at a time in source order, at most 4 paths per route. `/:controller[/:action[/:id]]` gives `/:controller`, `/:controller/:action` and `/:controller/:action/:id`; sibling groups `[/a][/b]` give `''`, `/a`, `/a/b` (not `/b` alone). Children join onto the parent's minimal form. A trailing `[/]` doesn't add a path; `:id{-}` delimiters and translated `{literal}` parts are normalized.
 - `Regex` routes use their `spec` (`%id%` → `:id`); `Hostname`/`Scheme` routes add no path; Part, Wildcard, Query and console routes are skipped.
+- **Config merged across modules**: a module's `'admin' => ['child_routes' => [...]]` stub (no type or route of its own) joins onto the `admin` route another module defines, as Laminas' config merge does. A stub extending a route no file defines is skipped.
 - A file that only `return`s a route map (required from a router config) is walked too. A file with no recognizable router tree falls back to the flat `'route' => '/path'` match, unless it has `child_routes` (whose values are fragments).
 
 Non-UTF-8 sources (cp1252/latin-1, common in ZF1/ZF2 code) are decoded by `attackmap.sdk.read_source` rather than skipped.

@@ -21,7 +21,7 @@ from attackmap_analyzer_php_laminas.phparray import (
     parse_call_args,
     tokenize,
 )
-from attackmap_analyzer_php_laminas.routes import expand_optional, mezzio_routes, router_routes
+from attackmap_analyzer_php_laminas.routes import expand_optional, mezzio_routes, route_trees, router_routes
 
 FIXTURES = Path(__file__).parent / "fixtures"
 NESTED = FIXTURES / "laminas_nested_app"
@@ -33,8 +33,7 @@ def _keys(repo: Path) -> set[tuple[str, str]]:
 
 
 def _routes(source: str) -> set[tuple[str, str]]:
-    routes, _ = router_routes(tokenize(source))
-    return {(r.path, r.method) for r in routes}
+    return {(r.path, r.method) for r in router_routes(route_trees(tokenize(source)))}
 
 
 # ---------------------------------------------------------------------------
@@ -181,8 +180,7 @@ return [
 
 def test_plain_return_array_is_not_a_route_map() -> None:
     source = "<?php return ['modules' => ['Application'], 'route' => '/not-a-route-map'];"
-    routes, found = router_routes(tokenize(source))
-    assert routes == [] and found is False
+    assert route_trees(tokenize(source)) == []
 
 
 def test_child_fragments_are_not_emitted_by_the_flat_fallback(tmp_path: Path) -> None:
@@ -345,7 +343,7 @@ def _fuzz_inputs() -> list[str]:
 def test_tokenizer_and_walkers_never_raise_on_garbage() -> None:
     for text in _fuzz_inputs():
         tokens = tokenize(text)
-        router_routes(tokens)
+        router_routes(route_trees(tokens), known={}, index={})
         mezzio_routes(tokens)
         for form in expand_optional(text[:200]):
             assert isinstance(form, str)
@@ -369,7 +367,44 @@ def test_tokenizer_and_walkers_never_raise_on_garbage() -> None:
 def test_hostile_input_is_bounded(payload: str) -> None:
     start = time.perf_counter()
     tokens = tokenize("<?php use Mezzio\\Application; return [" + payload)
-    router_routes(tokens)
+    router_routes(route_trees(tokens), known={}, index={})
     mezzio_routes(tokens)
     expand_optional(payload[:10_000])
     assert time.perf_counter() - start < 5.0
+
+
+# ---------------------------------------------------------------------------
+# Config merged across modules
+# ---------------------------------------------------------------------------
+
+
+def test_child_routes_added_by_another_module_join_the_defining_route() -> None:
+    keys = _keys(NESTED)
+    assert ("/admin/audit", "ANY") in keys
+    assert ("/admin/audit/:page", "ANY") in keys
+    result = PhpLaminasAnalyzer().analyze(NESTED)
+    audit = next(r for r in result.routes if r.path == "/admin/audit")
+    assert audit.file == "module/Audit/config/module.config.php"
+
+
+def test_stub_extending_an_unknown_route_is_skipped() -> None:
+    keys = _keys(NESTED)
+    assert not any("orphan" in path for path, _ in keys)
+
+
+def test_stub_of_a_stub_resolves_across_files(tmp_path: Path) -> None:
+    (tmp_path / "composer.json").write_text('{"require": {"laminas/laminas-mvc": "^3.0"}}')
+    (tmp_path / "a.php").write_text(
+        "<?php return ['router' => ['routes' => ['api' => ['type' => 'Literal', "
+        "'options' => ['route' => '/api'], 'child_routes' => ['v1' => ['type' => 'Literal', "
+        "'options' => ['route' => '/v1']]]]]]];"
+    )
+    # `0-ext.php` is walked first; the route index is built from every file
+    # before any route is emitted.
+    (tmp_path / "0-ext.php").write_text(
+        "<?php return ['router' => ['routes' => ['api' => ['child_routes' => ['v1' => ['child_routes' => ["
+        "'users' => ['type' => 'Literal', 'options' => ['route' => '/users']]]]]]]]];"
+    )
+    keys = _keys(tmp_path)
+    assert ("/api/v1/users", "ANY") in keys
+    assert ("/users", "ANY") not in keys

@@ -16,8 +16,11 @@ from .contracts import (
     ScanResult,
     SecretHint,
 )
-from .phparray import tokenize
-from .routes import mezzio_routes, router_routes
+from .phparray import PhpArray, tokenize
+from .routes import RouteNode, mezzio_routes, route_trees, router_routes
+
+# (file, content, route trees) awaiting the cross-file route index.
+_RouteFile = tuple[str, str, list[PhpArray]]
 
 # Fallback for a file with no recognizable `'router' => ['routes' => ...]`
 # tree (see `routes.py` for the structural walk): Laminas router
@@ -130,6 +133,7 @@ class PhpLaminasAnalyzer:
 
         # Pruned by repo-relative dir name (vendor, node_modules, .git, ...);
         # symlinks out of the repo are not followed (AttackMap#253).
+        pending: list[_RouteFile] = []
         for file_path in iter_repo_files(root, suffixes={".php"}):
             result.files_scanned += 1
             if "php" not in result.languages:
@@ -140,7 +144,7 @@ class PhpLaminasAnalyzer:
                 continue
 
             relative = rel(file_path, root)
-            self._extract_routes(content, relative, result)
+            self._extract_routes(content, relative, result, pending)
             self._extract_laminas_controllers(content, relative, result)
             self._extract_laminas_services(content, relative, result)
             self._extract_external_calls(content, relative, result)
@@ -148,6 +152,7 @@ class PhpLaminasAnalyzer:
             self._extract_auth_hints(content, relative, result)
             self._extract_secret_hints(content, relative, result)
 
+        self._emit_router_routes(pending, result)
         result.languages.sort()
         return result
 
@@ -186,24 +191,42 @@ class PhpLaminasAnalyzer:
             if "doctrine" in lowered:
                 self._append_unique_database(result, "sql", "composer.json", text, offset)
 
-    def _extract_routes(self, content: str, relative: str, result: ScanResult) -> None:
+    def _extract_routes(self, content: str, relative: str, result: ScanResult, pending: list[_RouteFile]) -> None:
+        """Mezzio and fallback routes now; router trees go to ``pending`` for
+        :meth:`_emit_router_routes`, which needs every file's route names."""
         mezzio = "Mezzio\\" in content or "Zend\\Expressive\\" in content
-        structural = False
+        trees: list = []
         # `'route'`, `'routes'`, `'router'` (cheap pre-check before tokenizing).
         if mezzio or "'route" in content or '"route' in content:
             tokens = tokenize(content)
-            routes, structural = router_routes(tokens)
-            for route in routes:
-                self._append_unique_route(result, route.path, route.method, relative, line_of(content, route.offset))
+            trees = route_trees(tokens)
+            if trees:
+                pending.append((relative, content, trees))
             if mezzio:
                 for route in mezzio_routes(tokens):
                     self._append_unique_route(result, route.path, route.method, relative, line_of(content, route.offset))
         # A child route's `'route' => '/:id'` is only a fragment of a path, so
         # the flat literal fallback is for files with no router tree at all.
-        if structural or "child_routes" in content:
+        if trees or "child_routes" in content:
             return
         for match in LAMINAS_ROUTE_PATTERN.finditer(content):
             self._append_unique_route(result, match.group(1), "ANY", relative, line_of(content, match.start()))
+
+    def _emit_router_routes(self, pending: list[_RouteFile], result: ScanResult) -> None:
+        # Laminas merges all modules' config: index every named route first so
+        # a module's `'admin' => ['child_routes' => [...]]` stub joins onto the
+        # `/admin` route defined in another module. A few rounds settle stubs
+        # of stubs.
+        index: dict[str, RouteNode] = {}
+        for _ in range(3):
+            before = len(index)
+            for _relative, _content, trees in pending:
+                router_routes(trees, known=index, index=index)
+            if len(index) == before:
+                break
+        for relative, content, trees in pending:
+            for route in router_routes(trees, known=index):
+                self._append_unique_route(result, route.path, route.method, relative, line_of(content, route.offset))
 
     def _extract_laminas_controllers(self, content: str, relative: str, result: ScanResult) -> None:
         first: int | None = None
