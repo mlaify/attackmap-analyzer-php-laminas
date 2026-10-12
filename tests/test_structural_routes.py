@@ -153,7 +153,8 @@ def test_regex_route_uses_spec_and_hostname_adds_no_path() -> None:
     keys = _keys(NESTED)
     assert ("/export/:id.csv", "ANY") in keys
     assert ("/tenant-home", "ANY") in keys
-    assert not any("example.com" in path for path, _ in keys)
+    # The hostname spec `:tenant.example.com` is never a path.
+    assert not any(path.startswith("/:tenant") for path, _ in keys)
 
 
 def test_console_routes_and_navigation_names_are_not_http_routes() -> None:
