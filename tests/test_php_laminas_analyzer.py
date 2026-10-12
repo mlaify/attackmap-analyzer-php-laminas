@@ -46,7 +46,10 @@ def test_analyze_extracts_routes_controllers_and_services() -> None:
 
     assert ("/", "ANY") in route_keys
     assert ("/admin", "ANY") in route_keys
-    assert ("/api[/:id]", "ANY") in route_keys
+    # `/api[/:id]` expands to its minimal and maximal forms (#2).
+    assert ("/api", "ANY") in route_keys
+    assert ("/api/:id", "ANY") in route_keys
+    assert not any("[" in path for path, _ in route_keys)
 
     # Framework metadata is a FrameworkHint, not an AuthHint (AttackMap#258).
     assert any(hint.startswith("controller:Application\\Controller\\") for hint in framework_hints)
@@ -145,9 +148,10 @@ ALBUM_CONTROLLER = "module/Album/src/Controller/AlbumController.php"
 
 def test_navigation_route_names_are_not_routes() -> None:
     # `'navigation' => [['route' => 'home'], ['route' => 'album/view']]` names
-    # routes; only the router's path specs are routes.
+    # routes; only the router's path specs are routes. The `[/:id]` child is
+    # joined onto `/album` (#2).
     result = PhpLaminasAnalyzer().analyze(NOISE)
-    assert {(r.path, r.method) for r in result.routes} == {("/album", "ANY"), ("[/:id]", "ANY")}
+    assert {(r.path, r.method) for r in result.routes} == {("/album", "ANY"), ("/album/:id", "ANY")}
 
 
 def test_db_and_api_connection_settings_are_not_secrets() -> None:

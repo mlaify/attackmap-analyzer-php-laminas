@@ -1,0 +1,7 @@
+{
+    "name": "example/nested",
+    "require": {
+        "laminas/laminas-mvc": "^3.6",
+        "laminas/laminas-router": "^3.11"
+    }
+}

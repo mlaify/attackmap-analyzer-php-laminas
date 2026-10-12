@@ -16,8 +16,15 @@ from .contracts import (
     ScanResult,
     SecretHint,
 )
+from .phparray import PhpArray, TokenList, tokenize
+from .routes import RouteNode, fallback_route_literals, mezzio_routes, route_trees, router_routes
 
-# Laminas router `'options' => ['route' => '/album[/:id]']`. Only URL path
+# (file, content, tokens, route trees) awaiting the cross-file route index.
+_RouteFile = tuple[str, str, TokenList, list[PhpArray]]
+
+# Fallback for a file with no recognizable `'router' => ['routes' => ...]`
+# tree (see `routes.py` for the structural walk): Laminas router
+# `'options' => ['route' => '/album[/:id]']`. Only URL path
 # specs: rooted (`/...`) or an optional child segment (`[/:id]`). The same
 # `'route' =>` key in `navigation` pages and redirects holds a route *name*
 # (`'route' => 'home'`, `'route' => 'admin/site'`), which is not a path
@@ -32,6 +39,9 @@ LAMINAS_CONTROLLER_PATTERN = re.compile(r"(?<![A-Za-z0-9_\\])([A-Za-z_\\][A-Za-z
 # identifier-like line, enough to stall a scan (mlaify/AttackMap#236).
 LAMINAS_SERVICE_PATTERN = re.compile(r"(?<![A-Za-z0-9_\\])([A-Za-z_\\][A-Za-z0-9_\\]*+)::class")
 _SERVICE_WORD = re.compile(r"Service|Manager|Repository|TableGateway|Adapter", re.IGNORECASE)
+
+# Composer packages that make a repo a Laminas (or Zend/Mezzio) app.
+_LAMINAS_PACKAGE_PREFIXES = ("laminas/", "zendframework/", "mezzio/")
 
 OUTBOUND_PATTERNS = [
     re.compile(r"curl_init\s*\(\s*['\"](https?://[^'\"]+)['\"]", re.IGNORECASE),
@@ -123,6 +133,8 @@ class PhpLaminasAnalyzer:
 
         # Pruned by repo-relative dir name (vendor, node_modules, .git, ...);
         # symlinks out of the repo are not followed (AttackMap#253).
+        pending: list[_RouteFile] = []
+        seen: set[tuple[str, str, str]] = set()
         for file_path in iter_repo_files(root, suffixes={".php"}):
             result.files_scanned += 1
             if "php" not in result.languages:
@@ -133,7 +145,7 @@ class PhpLaminasAnalyzer:
                 continue
 
             relative = rel(file_path, root)
-            self._extract_routes(content, relative, result)
+            self._extract_routes(content, relative, result, pending, seen)
             self._extract_laminas_controllers(content, relative, result)
             self._extract_laminas_services(content, relative, result)
             self._extract_external_calls(content, relative, result)
@@ -141,6 +153,7 @@ class PhpLaminasAnalyzer:
             self._extract_auth_hints(content, relative, result)
             self._extract_secret_hints(content, relative, result)
 
+        self._emit_router_routes(pending, result, seen)
         result.languages.sort()
         return result
 
@@ -154,8 +167,7 @@ class PhpLaminasAnalyzer:
             **(data.get("require-dev", {}) if isinstance(data.get("require-dev", {}), dict) else {}),
         }
         for package in requirements:
-            lowered = package.lower()
-            if lowered.startswith("laminas/") or lowered.startswith("zendframework/"):
+            if package.lower().startswith(_LAMINAS_PACKAGE_PREFIXES):
                 return True
         return False
 
@@ -173,16 +185,50 @@ class PhpLaminasAnalyzer:
         for package in requirements:
             lowered = package.lower()
             offset = self._composer_offset(text, package)
-            if lowered.startswith("laminas/") or lowered.startswith("zendframework/"):
+            if lowered.startswith(_LAMINAS_PACKAGE_PREFIXES):
                 self._append_unique_hint(
                     result.framework_hints, FrameworkHint, "laminas_dependency", "composer.json", text, offset, 0.9
                 )
             if "doctrine" in lowered:
                 self._append_unique_database(result, "sql", "composer.json", text, offset)
 
-    def _extract_routes(self, content: str, relative: str, result: ScanResult) -> None:
-        for match in LAMINAS_ROUTE_PATTERN.finditer(content):
-            self._append_unique_route(result, match.group(1), "ANY", relative, line_of(content, match.start()))
+    def _extract_routes(
+        self, content: str, relative: str, result: ScanResult, pending: list[_RouteFile], seen: set
+    ) -> None:
+        """Mezzio routes now; router trees go to ``pending`` for
+        :meth:`_emit_router_routes`, which needs every file's route names."""
+        mezzio = "Mezzio\\" in content or "Zend\\Expressive\\" in content
+        # `'route'`, `'routes'`, `'router'` (cheap pre-check before tokenizing).
+        if not (mezzio or "'route" in content or '"route' in content):
+            return
+        tokens = tokenize(content)
+        pending.append((relative, content, tokens, route_trees(tokens)))
+        if mezzio:
+            for route in mezzio_routes(tokens):
+                line = line_of(content, route.offset)
+                self._append_unique_route(result, seen, route.path, route.method, relative, line)
+
+    def _emit_router_routes(self, pending: list[_RouteFile], result: ScanResult, seen: set) -> None:
+        # Laminas merges all modules' config: index every named route first so
+        # a module's `'admin' => ['child_routes' => [...]]` stub joins onto the
+        # `/admin` route defined in another module. A few rounds settle stubs
+        # of stubs.
+        index: dict[str, RouteNode] = {}
+        for _ in range(3):
+            before = len(index)
+            for _relative, _content, _tokens, trees in pending:
+                router_routes(trees, known=index, index=index)
+            if len(index) == before:
+                break
+        for relative, content, tokens, trees in pending:
+            consumed: set[int] = set()
+            for route in router_routes(trees, known=index, consumed=consumed):
+                line = line_of(content, route.offset)
+                self._append_unique_route(result, seen, route.path, route.method, relative, line)
+            # Literals the walk never reached (routes built in a way it can't
+            # follow, or past the tokenizer cap) keep the flat match.
+            for path, offset in fallback_route_literals(content, tokens, consumed, LAMINAS_ROUTE_PATTERN):
+                self._append_unique_route(result, seen, path, "ANY", relative, line_of(content, offset))
 
     def _extract_laminas_controllers(self, content: str, relative: str, result: ScanResult) -> None:
         first: int | None = None
@@ -256,10 +302,11 @@ class PhpLaminasAnalyzer:
         return index if index >= 0 else 0
 
     @staticmethod
-    def _append_unique_route(result: ScanResult, path: str, method: str, file: str, line: int) -> None:
+    def _append_unique_route(result: ScanResult, seen: set, path: str, method: str, file: str, line: int) -> None:
         key = (path, method, file)
-        if any((item.path, item.method, item.file) == key for item in result.routes):
+        if key in seen:
             return
+        seen.add(key)
         result.routes.append(Route(path=path, method=method, file=file, line=line))
 
     @staticmethod

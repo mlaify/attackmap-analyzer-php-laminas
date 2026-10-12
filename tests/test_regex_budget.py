@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from attackmap_analyzer_php_laminas import analyzer
+from attackmap_analyzer_php_laminas import analyzer, phparray, routes
 
 PAYLOADS = {
     "long_word": "a" * 50_000,
@@ -16,14 +16,19 @@ PAYLOADS = {
     "long_quote": '"' + "A" * 50_000,
     "dotted": "a." * 25_000,
     "url_like": "https://" + "a" * 50_000,
+    "slashes": "/" * 50_000,
+    "braces": "{" * 25_000 + ":a" * 10_000,
+    "use_lines": "use " + "A\\" * 25_000,
 }
 
 
 def _patterns():
     found = []
-    for attr, value in vars(analyzer).items():
-        values = value if isinstance(value, (list, tuple)) else [value]
-        found += [(f"{attr}[{i}]", v) for i, v in enumerate(values) if isinstance(v, re.Pattern)]
+    for module in (analyzer, phparray, routes):
+        prefix = module.__name__.rsplit(".", 1)[-1]
+        for attr, value in vars(module).items():
+            values = value if isinstance(value, (list, tuple)) else [value]
+            found += [(f"{prefix}.{attr}[{i}]", v) for i, v in enumerate(values) if isinstance(v, re.Pattern)]
     return found
 
 
