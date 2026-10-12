@@ -21,7 +21,7 @@ from attackmap_analyzer_php_laminas.phparray import (
     parse_call_args,
     tokenize,
 )
-from attackmap_analyzer_php_laminas.routes import expand_optional, mezzio_routes, minimal_form, route_trees, router_routes
+from attackmap_analyzer_php_laminas.routes import expand_optional, maximal_form, mezzio_routes, minimal_form, route_trees, router_routes
 
 FIXTURES = Path(__file__).parent / "fixtures"
 NESTED = FIXTURES / "laminas_nested_app"
@@ -412,14 +412,27 @@ def test_stub_of_a_stub_resolves_across_files(tmp_path: Path) -> None:
     assert ("/users", "ANY") not in keys
 
 
-def test_children_join_the_parent_minimal_form() -> None:
+def test_children_join_the_parent_maximal_form() -> None:
+    # Laminas' Part::match: the parent Segment consumes greedily and never
+    # backs off, so `/h/job/5` sets action=job and the child can't match;
+    # the child is reached at `/h/:action/job/:id`.
     source = """<?php return ['router' => ['routes' => [
         'h' => ['type' => 'Segment', 'options' => ['route' => '/h[/:action]'], 'child_routes' => [
             'job' => ['type' => 'Segment', 'options' => ['route' => '/job/:id']],
         ]],
     ]]];"""
-    assert _routes(source) == {("/h/job/:id", "ANY")}
+    assert _routes(source) == {("/h/:action/job/:id", "ANY")}
     assert minimal_form("/a[/:b[/:c]]/d[/:e]") == "/a/d"
+    assert maximal_form("/a[/:b[/:c]]/d[/:e]") == "/a/:b/:c/d/:e"
+
+
+def test_child_that_can_match_nothing_keeps_every_parent_form() -> None:
+    source = """<?php return ['router' => ['routes' => [
+        'h' => ['type' => 'Segment', 'options' => ['route' => '/h[/:action]'], 'child_routes' => [
+            'id' => ['type' => 'Segment', 'options' => ['route' => '[/:id]']],
+        ]],
+    ]]];"""
+    assert _routes(source) == {("/h", "ANY"), ("/h/:action", "ANY"), ("/h/:action/:id", "ANY")}
 
 
 

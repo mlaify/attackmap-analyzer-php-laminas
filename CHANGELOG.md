@@ -14,7 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Router/routes arrays held in a same-file variable are followed; any route literal the walk didn't reach (or past the 500k-token cap) keeps the flat match unless it sits inside `child_routes`.
 - Route de-duplication uses a key set (was a linear scan per route).
 - **Config merged across modules**: a module's `'admin' => ['child_routes' => [...]]` stub joins onto the `admin` route defined in another module's config (stubs of unknown routes are skipped).
-- **Segment optional parts are expanded** to the minimal form plus one more optional group per form (at most 4 paths per route); no more `[` in route paths. `Regex` routes use their `spec`; `Hostname`/`Scheme` add no path; console routes are skipped.
+- **Segment optional parts are expanded** to the minimal form plus one more optional group per form (at most 4 paths per route); no more `[` in route paths. Child paths join the parent's maximal form (Laminas' greedy `Part::match`), or every form when the child can match nothing. `Regex` routes use their `spec`; `Hostname`/`Scheme` add no path; console routes are skipped.
 - **Mezzio** `$app->get/post/put/patch/delete/any(...)` and `$app->route(..., [methods])` are extracted from files that reference `Mezzio\` / `Zend\Expressive\`; `mezzio/*` composer packages count for `detect()`.
 - New `phparray.py` (bounded, string/comment-aware PHP array tokenizer) and `routes.py`, fuzzed in `tests/test_structural_routes.py`.
 - Real world: Omeka S core 20 → 40 routes (all joined); laminas-mvc-skeleton 2 → 3.
