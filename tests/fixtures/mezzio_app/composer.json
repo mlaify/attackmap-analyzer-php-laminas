@@ -1,0 +1,7 @@
+{
+    "name": "example/mezzio",
+    "require": {
+        "mezzio/mezzio": "^3.17",
+        "laminas/laminas-diactoros": "^3.0"
+    }
+}

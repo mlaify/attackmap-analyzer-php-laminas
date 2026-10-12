@@ -16,8 +16,12 @@ from .contracts import (
     ScanResult,
     SecretHint,
 )
+from .phparray import tokenize
+from .routes import mezzio_routes, router_routes
 
-# Laminas router `'options' => ['route' => '/album[/:id]']`. Only URL path
+# Fallback for a file with no recognizable `'router' => ['routes' => ...]`
+# tree (see `routes.py` for the structural walk): Laminas router
+# `'options' => ['route' => '/album[/:id]']`. Only URL path
 # specs: rooted (`/...`) or an optional child segment (`[/:id]`). The same
 # `'route' =>` key in `navigation` pages and redirects holds a route *name*
 # (`'route' => 'home'`, `'route' => 'admin/site'`), which is not a path
@@ -32,6 +36,9 @@ LAMINAS_CONTROLLER_PATTERN = re.compile(r"(?<![A-Za-z0-9_\\])([A-Za-z_\\][A-Za-z
 # identifier-like line, enough to stall a scan (mlaify/AttackMap#236).
 LAMINAS_SERVICE_PATTERN = re.compile(r"(?<![A-Za-z0-9_\\])([A-Za-z_\\][A-Za-z0-9_\\]*+)::class")
 _SERVICE_WORD = re.compile(r"Service|Manager|Repository|TableGateway|Adapter", re.IGNORECASE)
+
+# Composer packages that make a repo a Laminas (or Zend/Mezzio) app.
+_LAMINAS_PACKAGE_PREFIXES = ("laminas/", "zendframework/", "mezzio/")
 
 OUTBOUND_PATTERNS = [
     re.compile(r"curl_init\s*\(\s*['\"](https?://[^'\"]+)['\"]", re.IGNORECASE),
@@ -154,8 +161,7 @@ class PhpLaminasAnalyzer:
             **(data.get("require-dev", {}) if isinstance(data.get("require-dev", {}), dict) else {}),
         }
         for package in requirements:
-            lowered = package.lower()
-            if lowered.startswith("laminas/") or lowered.startswith("zendframework/"):
+            if package.lower().startswith(_LAMINAS_PACKAGE_PREFIXES):
                 return True
         return False
 
@@ -173,7 +179,7 @@ class PhpLaminasAnalyzer:
         for package in requirements:
             lowered = package.lower()
             offset = self._composer_offset(text, package)
-            if lowered.startswith("laminas/") or lowered.startswith("zendframework/"):
+            if lowered.startswith(_LAMINAS_PACKAGE_PREFIXES):
                 self._append_unique_hint(
                     result.framework_hints, FrameworkHint, "laminas_dependency", "composer.json", text, offset, 0.9
                 )
@@ -181,6 +187,21 @@ class PhpLaminasAnalyzer:
                 self._append_unique_database(result, "sql", "composer.json", text, offset)
 
     def _extract_routes(self, content: str, relative: str, result: ScanResult) -> None:
+        mezzio = "Mezzio\\" in content or "Zend\\Expressive\\" in content
+        structural = False
+        # `'route'`, `'routes'`, `'router'` (cheap pre-check before tokenizing).
+        if mezzio or "'route" in content or '"route' in content:
+            tokens = tokenize(content)
+            routes, structural = router_routes(tokens)
+            for route in routes:
+                self._append_unique_route(result, route.path, route.method, relative, line_of(content, route.offset))
+            if mezzio:
+                for route in mezzio_routes(tokens):
+                    self._append_unique_route(result, route.path, route.method, relative, line_of(content, route.offset))
+        # A child route's `'route' => '/:id'` is only a fragment of a path, so
+        # the flat literal fallback is for files with no router tree at all.
+        if structural or "child_routes" in content:
+            return
         for match in LAMINAS_ROUTE_PATTERN.finditer(content):
             self._append_unique_route(result, match.group(1), "ANY", relative, line_of(content, match.start()))
 

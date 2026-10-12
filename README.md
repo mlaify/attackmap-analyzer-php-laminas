@@ -12,7 +12,8 @@ Framework-aware Laminas analyzer for [AttackMap](https://github.com/mlaify/Attac
 
 This module focuses on structured signal extraction for Laminas/Zend MVC projects:
 
-- route paths from config arrays (`'route' => '/album[/:id]'`; route *names* such as navigation's `'route' => 'home'` are not routes)
+- route paths from the `'router' => ['routes' => [...]]` config tree, walked structurally (see [Routes](#routes)); route *names* such as navigation's `'route' => 'home'` are not routes
+- Mezzio/Expressive routes (`$app->get('/x', ...)`, `->post/put/patch/delete/any`, `$app->route('/x', $mw, ['GET', 'POST'])`) in files that reference `Mezzio\` or `Zend\Expressive\`
 - controller mapping hints
 - service-manager mapping hints
 - broad PHP security signals (outbound calls, datastore, auth, secret hints)
@@ -29,11 +30,23 @@ This module focuses on structured signal extraction for Laminas/Zend MVC project
 
 `detect(repo_path)` returns true when one or more Laminas indicators exist:
 
-- composer dependencies beginning with `laminas/` or `zendframework/`
+- composer dependencies beginning with `laminas/`, `zendframework/` or `mezzio/`
 - a `module/` directory together with `config/application.config.php`
 - any `module.config.php` outside `vendor/` (and the other shared skip dirs)
 
 A generic `src/`, `app/` or `config/` directory on its own is not enough.
+
+## Routes
+
+Router config is read with a small PHP-array tokenizer (`phparray.py`) that balances `[`/`]` and `array(`/`)` and skips strings, heredocs and comments, so a route is reported with its full path:
+
+- **`child_routes` are joined** onto the parent path: `'/admin'` → `'/users'` → `'/:id'` is `/admin/users/:id`. A parent with children is itself a route only with `'may_terminate' => true`.
+- **Method routes** (`'type' => Method::class, 'options' => ['verb' => 'post']`, or `'get,head'`) set the HTTP method on the parent's path instead of adding a path.
+- **Segment optional parts are expanded progressively**: the minimal form, then one more optional group opened at a time in source order, at most 4 paths per route. `/:controller[/:action[/:id]]` gives `/:controller`, `/:controller/:action` and `/:controller/:action/:id`; sibling groups `[/a][/b]` give `''`, `/a`, `/a/b` (not `/b` alone). Children join onto the parent's minimal form. A trailing `[/]` doesn't add a path; `:id{-}` delimiters and translated `{literal}` parts are normalized.
+- `Regex` routes use their `spec` (`%id%` → `:id`); `Hostname`/`Scheme` routes add no path; Part, Wildcard, Query and console routes are skipped.
+- A file that only `return`s a route map (required from a router config) is walked too. A file with no recognizable router tree falls back to the flat `'route' => '/path'` match, unless it has `child_routes` (whose values are fragments).
+
+Non-UTF-8 sources (cp1252/latin-1, common in ZF1/ZF2 code) are decoded by `attackmap.sdk.read_source` rather than skipped.
 
 ## Notes
 
