@@ -185,14 +185,14 @@ def test_plain_return_array_is_not_a_route_map() -> None:
 
 
 def test_child_fragments_are_not_emitted_by_the_flat_fallback(tmp_path: Path) -> None:
-    # A file whose router tree can't be recognized (routes built in a
-    # variable) but that has child_routes: no fragments.
+    # A route map the walk can't reach (a variable no router uses): the flat
+    # fallback keeps its top-level literal but not the child fragment.
     (tmp_path / "composer.json").write_text('{"require": {"laminas/laminas-mvc": "^3.0"}}')
     (tmp_path / "routes.php").write_text(
         "<?php\n$routes = ['x' => ['options' => ['route' => '/x'], 'child_routes' => ["
         "'y' => ['options' => ['route' => '/:id']]]]];\n"
     )
-    assert _keys(tmp_path) == set()
+    assert _keys(tmp_path) == {("/x", "ANY")}
 
 
 def test_flat_fallback_still_reads_a_file_without_a_router_tree(tmp_path: Path) -> None:
@@ -362,8 +362,9 @@ def test_tokenizer_and_walkers_never_raise_on_garbage() -> None:
         "'" + "\\" * 50_000,
         "/*" + "[" * 50_000,
         "$app->route(" * 20_000,
+        "$a = [" * 5_000 + "'router' => $a, " * 5_000 + "'router' => ['routes' => $a], " * 5_000,
     ],
-    ids=["brackets", "array_calls", "router_keys", "child_routes", "optional_parts", "heredoc", "backslashes", "comment", "mezzio"],
+    ids=["brackets", "array_calls", "router_keys", "child_routes", "optional_parts", "heredoc", "backslashes", "comment", "mezzio", "variables"],
 )
 def test_hostile_input_is_bounded(payload: str) -> None:
     start = time.perf_counter()
@@ -419,3 +420,87 @@ def test_children_join_the_parent_minimal_form() -> None:
     ]]];"""
     assert _routes(source) == {("/h/job/:id", "ANY")}
     assert minimal_form("/a[/:b[/:c]]/d[/:e]") == "/a/d"
+
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: Method children on optional parents, routes in variables,
+# the tokenizer cap and route de-duplication
+# ---------------------------------------------------------------------------
+
+
+def test_method_children_apply_to_every_form_of_an_optional_parent() -> None:
+    source = """<?php return ['router' => ['routes' => [
+        'user' => ['type' => 'Segment', 'options' => ['route' => '/user[/:id]'], 'child_routes' => [
+            'get' => ['type' => 'Method', 'options' => ['verb' => 'get']],
+            'delete' => ['type' => 'Method', 'options' => ['verb' => 'delete']],
+        ]],
+    ]]];"""
+    assert _routes(source) == {
+        ("/user", "GET"),
+        ("/user/:id", "GET"),
+        ("/user", "DELETE"),
+        ("/user/:id", "DELETE"),
+    }
+
+
+def test_routes_held_in_a_same_file_variable_are_walked(tmp_path: Path) -> None:
+    (tmp_path / "composer.json").write_text('{"require": {"laminas/laminas-mvc": "^3.0"}}')
+    (tmp_path / "module.config.php").write_text(
+        "<?php\n$routes = ['album' => ['type' => 'Literal', 'options' => ['route' => '/album'], "
+        "'may_terminate' => true, 'child_routes' => ['view' => ['type' => 'Segment', "
+        "'options' => ['route' => '[/:id]']]]]];\n"
+        "return ['router' => ['routes' => $routes]];\n"
+    )
+    assert _keys(tmp_path) == {("/album", "ANY"), ("/album/:id", "ANY")}
+
+
+def test_router_held_in_a_variable_is_walked() -> None:
+    source = """<?php
+$router = ['routes' => ['a' => ['type' => 'Literal', 'options' => ['route' => '/a']]]];
+$router = ['routes' => ['b' => ['type' => 'Literal', 'options' => ['route' => '/b']]]];
+return ['router' => $router];"""
+    # The last assignment before the use.
+    assert _routes(source) == {("/b", "ANY")}
+
+
+def test_unfollowable_routes_fall_back_to_flat_literals(tmp_path: Path) -> None:
+    (tmp_path / "composer.json").write_text('{"require": {"laminas/laminas-mvc": "^3.0"}}')
+    (tmp_path / "module.config.php").write_text(
+        "<?php\nreturn ['router' => ['routes' => array_merge(\n"
+        "  ['a' => ['type' => 'Literal', 'options' => ['route' => '/a'], 'child_routes' => [\n"
+        "    'c' => ['type' => 'Segment', 'options' => ['route' => '/:id']]]]],\n"
+        "  $more)]];\n"
+    )
+    # `/a` is kept (main reported it too); the child fragment `/:id` is not.
+    assert _keys(tmp_path) == {("/a", "ANY")}
+
+
+def test_routes_past_the_token_cap_fall_back_to_flat_literals(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from attackmap_analyzer_php_laminas import analyzer as analyzer_module
+
+    real = analyzer_module.tokenize
+    monkeypatch.setattr(analyzer_module, "tokenize", lambda content: real(content, max_tokens=40))
+    (tmp_path / "composer.json").write_text('{"require": {"laminas/laminas-mvc": "^3.0"}}')
+    entries = "".join(
+        f"'r{i}' => ['type' => 'Literal', 'options' => ['route' => '/r{i}']],\n" for i in range(10)
+    )
+    (tmp_path / "module.config.php").write_text(f"<?php\nreturn ['router' => ['routes' => [\n{entries}]]];\n")
+    tokens = real((tmp_path / "module.config.php").read_text(), max_tokens=40)
+    assert tokens.truncated
+    # The walk sees only the first route; the rest come from the flat match.
+    assert _keys(tmp_path) == {(f"/r{i}", "ANY") for i in range(10)}
+
+
+def test_many_routes_are_deduplicated_in_linear_time(tmp_path: Path) -> None:
+    (tmp_path / "composer.json").write_text('{"require": {"laminas/laminas-mvc": "^3.0"}}')
+    for f in range(30):
+        entries = "".join(
+            f"'r{i}' => ['type' => 'Literal', 'options' => ['route' => '/f{f}/r{i}']],\n" for i in range(2000)
+        )
+        (tmp_path / f"m{f}.php").write_text(f"<?php\nreturn ['router' => ['routes' => [\n{entries}]]];\n")
+    start = time.perf_counter()
+    result = PhpLaminasAnalyzer().analyze(tmp_path)
+    assert len(result.routes) == 60_000
+    # Linear: ~3 s locally; the old list scan took minutes.
+    assert time.perf_counter() - start < 30.0
