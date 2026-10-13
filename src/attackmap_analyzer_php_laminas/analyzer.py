@@ -4,18 +4,22 @@ import json
 import re
 from pathlib import Path
 
-from attackmap.sdk import iter_repo_files, line_of, line_snippet, read_source, rel
-
-from .contracts import (
+from attackmap.sdk import (
     AnalyzerMetadata,
     AuthHint,
     DatabaseHint,
     ExternalCall,
     FrameworkHint,
+    iter_repo_files,
+    line_of,
+    line_snippet,
+    read_source,
+    rel,
     Route,
     ScanResult,
     SecretHint,
 )
+
 from .phparray import PhpArray, TokenList, tokenize
 from .routes import RouteNode, fallback_route_literals, mezzio_routes, route_trees, router_routes
 

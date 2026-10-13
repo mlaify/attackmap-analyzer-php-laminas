@@ -6,7 +6,7 @@ import pytest
 
 from attackmap.sdk.contracts import AnalyzerMetadata as SharedAnalyzerMetadata
 from attackmap.sdk.models import ScanResult as SharedScanResult
-from attackmap_analyzer_php_laminas.contracts import AnalyzerMetadata, ScanResult
+from attackmap.sdk import AnalyzerMetadata, ScanResult
 from attackmap_analyzer_php_laminas import PhpLaminasAnalyzer
 
 FIXTURES = Path(__file__).parent / "fixtures"
