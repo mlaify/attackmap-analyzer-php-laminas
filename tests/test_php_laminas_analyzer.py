@@ -176,3 +176,35 @@ def test_firebase_jwt_usage_is_a_jwt_hint() -> None:
     result = PhpLaminasAnalyzer().analyze(NOISE)
     hints = {(h.hint, h.file) for h in result.auth_hints}
     assert ("jwt", "module/Album/src/Controller/TokenController.php") in hints
+
+NON_VERIFYING_JWT = [
+    "<?php\nuse Firebase\\JWT\\JWT;\nuse Lcobucci\\JWT\\Configuration;\n",
+    "<?php\n// TODO: verify the JWT\n$x = 1;\n",
+    "<?php\n$t = JWT::encode($payload, $key, 'HS256');\n",
+    "<?php\n$t = $config->builder()->issuedBy('x')->getToken($config->signer(), $config->signingKey());\n",
+    "<?php\n$t = JWTAuth::fromUser($user);\n",
+    "<?php\n$token = $config->parser()->parse($raw);\n",
+]
+
+VERIFYING_JWT = [
+    "$c = JWT::decode($raw, new Key($k, 'HS256'));",
+    "$user = JWTAuth::parseToken()->authenticate();",
+    "Route::middleware('jwt.auth')->get('/me', fn () => 1);",
+    "if (!$config->validator()->validate($token, ...$config->validationConstraints())) { exit; }",
+    "$validator->assert($token, new SignedWith($signer, $key));",
+    "$app->add(new Tuupola\\Middleware\\JwtAuthentication(['secret' => $s]));",
+]
+
+
+@pytest.mark.parametrize("body", NON_VERIFYING_JWT)
+def test_jwt_hint_needs_verification(tmp_path: Path, body: str) -> None:
+    (tmp_path / "auth.php").write_text(body, encoding="utf-8")
+    result = PhpLaminasAnalyzer().analyze(tmp_path)
+    assert not any(h.hint == "jwt" for h in result.auth_hints)
+
+
+@pytest.mark.parametrize("line", VERIFYING_JWT)
+def test_jwt_hint_from_verification(tmp_path: Path, line: str) -> None:
+    (tmp_path / "auth.php").write_text("<?php\n" + line + "\n", encoding="utf-8")
+    hints = [h for h in PhpLaminasAnalyzer().analyze(tmp_path).auth_hints if h.hint == "jwt"]
+    assert [h.line for h in hints] == [2]
