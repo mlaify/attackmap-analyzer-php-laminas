@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed — JWT auth hints need verification (#11, AttackMap#325)
+
+- The `jwt` auth hint used to match imports (`use Firebase\JWT\JWT;`, `Lcobucci\JWT`, `Tymon\JWTAuth`), `JWT::encode` and any `JWTAuth::` call. It now needs verification:
+  - firebase/php-jwt `JWT::decode(`, which always checks the signature;
+  - tymon `JWTAuth::parseToken|authenticate|toUser|getPayload|check`, or `'jwt.auth'` / `'jwt.verify'` middleware;
+  - lcobucci `validator()->validate(` / `->assert(` or `new SignedWith(`;
+  - Tuupola `JwtAuthentication`.
+- Core credits any auth hint near a route as that route's auth, so files that only built or signed tokens made their routes look protected.
+
 ### Changed — structural router walking (#2, mlaify/AttackMap#261)
 
 - **`child_routes` are joined to their parent** instead of each `'route' =>` literal being a standalone route: Omeka S core's `'[/:resource[/:id]]'` under `/api` is now `/api/:resource` and `/api/:resource/:id`, not `[/:resource[/:id]]`. `'may_terminate'` decides whether a parent with children is itself a route.

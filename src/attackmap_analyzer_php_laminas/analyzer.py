@@ -66,12 +66,16 @@ DATABASE_PATTERNS = [
 AUTH_PATTERNS = [
     (re.compile(r"\bsession_start\s*\(", re.IGNORECASE), "session"),
     (re.compile(r"\$_SESSION\b", re.IGNORECASE), "session"),
-    # A JWT library, not any "jwt" substring (`$jwtSecret`, comments)
-    # (port of mlaify/attackmap-analyzer-php-web#2).
+    # JWT verification only (AttackMap#325): core credits any auth hint near a
+    # route as that route's auth, so `use` imports, `JWT::encode` and building
+    # tokens don't count. firebase/php-jwt `JWT::decode` always verifies; tymon
+    # facade checks and `jwt.auth` middleware; lcobucci validator / SignedWith;
+    # Tuupola JwtAuthentication middleware.
     (
         re.compile(
-            r"Firebase\\JWT\\JWT|\bJWT::(?:decode|encode)\b|Lcobucci\\JWT|lcobucci/jwt"
-            r"|Tymon\\JWTAuth|tymon/jwt-auth|\bJWTAuth::"
+            r"\bJWT::decode\s*\(|\bJWTAuth::(?:parseToken|authenticate|toUser|getPayload|check)\b"
+            r"|['\"]jwt\.(?:auth|verify)['\"]|\bvalidator\s*\(\s*\)\s*->\s*(?:validate|assert)\s*\("
+            r"|\bnew\s+SignedWith\s*\(|\bJwtAuthentication\b"
         ),
         "jwt",
     ),
