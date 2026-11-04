@@ -100,7 +100,7 @@ class PhpLaminasAnalyzer:
     metadata = AnalyzerMetadata(
         name="php-laminas",
         display_name="PHP Laminas Analyzer",
-        version="0.1.0",
+        version="0.2.0",
         description="Framework-aware Laminas analyzer for route, controller, and service mapping hints.",
         scope="Laminas and Zend Framework MVC projects using module and application config arrays.",
         targets=["php-laminas", "laminas", "zendframework"],
