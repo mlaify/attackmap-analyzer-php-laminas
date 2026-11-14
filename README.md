@@ -18,6 +18,17 @@ This module focuses on structured signal extraction for Laminas/Zend MVC project
 - service-manager mapping hints
 - broad PHP security signals (outbound calls, datastore, auth, secret hints)
 
+## Install
+
+```bash
+uv tool install attackmap --with attackmap-analyzer-php-laminas    # from PyPI
+# or: pip install attackmap-analyzer-php-laminas    (installs attackmap too)
+# or from source:
+pip install git+https://github.com/mlaify/attackmap-analyzer-php-laminas.git
+```
+
+The analyzer is auto-discovered by AttackMap via the `attackmap.analyzers` entry-point group.
+
 ## Analyzer identity
 
 - `name`: `php-laminas`
