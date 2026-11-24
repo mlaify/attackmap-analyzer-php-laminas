@@ -5,6 +5,7 @@ import re
 from pathlib import Path
 
 from attackmap.sdk import (
+    plugin_version,
     AnalyzerMetadata,
     AuthHint,
     DatabaseHint,
@@ -100,7 +101,8 @@ class PhpLaminasAnalyzer:
     metadata = AnalyzerMetadata(
         name="php-laminas",
         display_name="PHP Laminas Analyzer",
-        version="0.2.1",
+        version=plugin_version("attackmap-analyzer-php-laminas", default="0.2.1"),
+        requires_core=">=0.8,<2",
         description="Framework-aware Laminas analyzer for route, controller, and service mapping hints.",
         scope="Laminas and Zend Framework MVC projects using module and application config arrays.",
         targets=["php-laminas", "laminas", "zendframework"],
